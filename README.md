@@ -15,7 +15,7 @@ Then, use `cargo run` in the root directory for a debug build, or `cargo run --r
 
 Building the image is very simple. All you need is to set the DB connection string in Rocket.toml to the correct settings for your local database. 
 
-Then, from the root of the project: 
+Then, from the `webserver` directory of the project: 
 
     docker build --tag webserver:0.2.5 .
 
