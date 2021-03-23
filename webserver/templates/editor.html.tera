@@ -1,0 +1,511 @@
+{% extends "base" %} {%block head%}
+<title>Editor {{ version }}</title>
+<link href="css/editor.css" rel="stylesheet" />
+<script src="/js/feature_styles.js"></script>
+<!-- <script
+  defer
+  src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDlNNMWbmDr1XLDI_Krs_cSjWP4p3OJsXU&callback=initMap&libraries=drawing,places"
+></script> -->
+<script
+    src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAAPcksnihz3jQIm7VDIz8i2rp2NNbg3_4&callback=initMap&libraries=drawing,places&v=weekly"
+    defer
+></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/uuid/8.1.0/uuidv4.min.js"></script>
+<script>
+    let map;
+    let dataOptions;
+    let polygonLabelMarkers = new Map();
+    let geoJsonOptions = {
+        idPropertyName: "id",
+    };
+    let featureProperties = {
+        id: 0,
+        type: "generic",
+    };
+
+    function initMap() {
+        console.log("initMap...");
+        map = new google.maps.Map(document.getElementById("map"), {
+            keyboardShortcuts: false,
+            zoom: 18,
+            center: {
+                lng: -93.450183,
+                lat: 45.105968,
+            },
+            gestureHandling: "cooperative",
+        });
+
+        // Create the search box and link it to the UI element.
+        const input = document.getElementById("pac-input");
+        const searchBox = new google.maps.places.SearchBox(input);
+        map.controls[google.maps.ControlPosition.TOP_LEFT].push(input);
+
+        function endEditing() {
+            map.data.forEach((feature) => map.data.overrideStyle(feature, { editable: false, draggable: false }));
+        }
+
+        // Add a getCenter() method to the Polygon (how is this not *already* a function?)
+        google.maps.Data.Polygon.prototype.getBounds = function () {
+            var bounds = new google.maps.LatLngBounds();
+            this.forEachLatLng(function (latLng) {
+                bounds.extend(latLng);
+            });
+            return bounds;
+        };
+        google.maps.Data.Polygon.prototype.getCenter = function () {
+            return this.getBounds().getCenter();
+        };
+
+        function closeAllOpenContextMenus() {
+            document.getElementById("map-context-menu").style.visibility = "hidden";
+            document.getElementById("feature-context-menu").style.visibility = "hidden";
+        }
+            
+        // Listen for the event fired when the user selects a prediction and search for the geo
+        searchBox.addListener("places_changed", () => {
+            // Remove the polygon label markers
+            polygonLabelMarkers.forEach((value, key, map) => value.setMap(null));
+            polygonLabelMarkers.clear();
+
+            // remove the features currently on the map
+            map.data.forEach(function (feature) {
+                map.data.remove(feature);
+            });
+
+            const places = searchBox.getPlaces();
+
+            // don't do anything if we don't have any elements
+            if (places.length == 0) {
+                return;
+            }
+
+            // search using the first (and often only) result
+            fetch("/api/search", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify(places[0]),
+            })
+                .then((response) => response.json())
+                .then((geoJson) => {
+                    map.data.addGeoJson(geoJson);
+                    map.setCenter(places[0].geometry.location);
+                    map.setZoom(19);
+                })
+                .catch((error) => {
+                    console.error("Error:", error);
+                });
+            
+        });
+
+        //	close context menus on map click
+        map.addListener("click", function (mouseEvent) {
+            endEditing();
+            closeAllOpenContextMenus();
+        });
+
+        //	close context menus on bounds change
+        map.addListener("bounds_changed", function (mouseEvent) {
+            // Bias searchbox to current viewport
+            searchBox.setBounds(map.getBounds());
+            // close the contextMenus if a user moves the map by dragging
+            closeAllOpenContextMenus();
+        });
+
+        //	Set up the right-click context menu for the map (as opposed to the context menu for features)
+        map.addListener("contextmenu", function (mouseEvent) {
+            closeAllOpenContextMenus();
+            // open this menu and set its position
+            document.getElementById("map-context-menu").style.visibility = "visible";
+            document.getElementById("map-context-menu").style.left = mouseEvent.domEvent.clientX + "px";
+            document.getElementById("map-context-menu").style.top = mouseEvent.domEvent.clientY + "px";
+
+            // SET THE ACTIONS FOR THE MENU ITEMS
+
+            // CENTER THE MAP
+            document.querySelector("#center-map-item").onclick = function (event) {
+                closeAllOpenContextMenus();
+                const originalMouseEvent = mouseEvent;
+                map.setCenter({
+                    lng: originalMouseEvent.latLng.lng(),
+                    lat: originalMouseEvent.latLng.lat(),
+                });
+                return false;
+            };
+
+            // ADD A NEW BUILDING
+            document.querySelector("#add-building-menuitem").onclick = function (event) {
+                closeAllOpenContextMenus();
+                map.data.setDrawingMode("Polygon");
+                featureProperties.type = "building";
+                return false;
+            };
+
+            // ADD A NEW COMPLEX
+            document.querySelector("#add-complex-menuitem").onclick = function (event) {
+                closeAllOpenContextMenus();
+                map.data.setDrawingMode("Polygon");
+                featureProperties.type = "complex";
+                return false;
+            };
+        });
+
+        // OPTIONS FOR DATA LAYER
+        dataOptions = {
+            map: map,
+            style: { fillOpacity: 0.85, fillColor: "white", strokeColor: "black" },
+            featureFactory: function (featureGeometry) {
+                const featureId = uuidv4();
+                var newFeature = new google.maps.Data.Feature({
+                    id: featureId,
+                    geometry: featureGeometry,
+                    properties: Object.assign({}, featureProperties, { id: featureId }),
+                });
+
+                map.data.setDrawingMode(null);
+                if (featureGeometry.getType() == "Point") {
+                    map.data.overrideStyle(newFeature, {
+                        label: { text: "Add label?", color: "blue", fontWeight: "bold" },
+                        zIndex: 999999,
+                    });
+                } else if (featureGeometry.getType() == "Polygon") {
+                    let marker = new google.maps.Marker({
+                        position: featureGeometry.getCenter(),
+                        map,
+                        icon: {
+                            path: google.maps.SymbolPath.CIRCLE,
+                            scale: 10,
+                            fillOpacity: 0.0,
+                            strokeOpacity: 0.0,
+                        },
+                        clickable: false,
+                        draggable: false,
+                        label: { text: "Add label?", color: "blue", fontWeight: "bold" },
+                        title: "Hello World!",
+                    });
+                    polygonLabelMarkers.set(featureId, marker);
+                }
+                newFeature.toGeoJson(function (geoJson) {
+                    updateFeature(geoJson).catch((error) => {
+                        console.error("Fetch Error:", error);
+                    });
+                });
+                addKeyPressHandlerTo(newFeature);
+                return newFeature;
+            },
+        };
+        
+        // Create map data layer
+        map.data = new google.maps.Data(dataOptions);
+
+        //	Set up the right-click context menu for a feature on the map
+        map.data.addListener("contextmenu", function (mouseEvent) {
+            closeAllOpenContextMenus();
+            // set the title for the menu
+            document.getElementById("feature-type-text").innerHTML = mouseEvent.feature.getProperty("type");
+            // open this menu and set its position
+            document.getElementById("feature-context-menu").style.visibility = "visible";
+            document.getElementById("feature-context-menu").style.left = mouseEvent.domEvent.clientX + "px";
+            document.getElementById("feature-context-menu").style.top = mouseEvent.domEvent.clientY + "px";
+
+            // ADD ONCLICK HANDLERS TO FEATURE CONTEXT MENU
+
+            // EDIT FEATURE
+            document.querySelector("#edit-feature-menuitem").onclick = function (event) {
+                closeAllOpenContextMenus();
+                endEditing();
+                const originalMouseEvent = mouseEvent;
+                map.data.overrideStyle(originalMouseEvent.feature, {
+                    editable: true,
+                    draggable: true,
+                });
+
+                return false;
+            };
+
+            // EDIT (FEATURE) LABEL
+            document.querySelector("#edit-label-menuitem").onclick = function (event) {
+                closeAllOpenContextMenus();
+                endEditing();
+                const originalMouseEvent = mouseEvent;
+                addKeyPressHandlerTo(originalMouseEvent.feature);
+                return false;
+            };
+
+            // ADD APARTMENT AS POINT
+            document.querySelector("#add-apartment-point-in-feature-menuitem").onclick = function (event) {
+                closeAllOpenContextMenus();
+                let originalMouseEvent = mouseEvent;
+                const featureId = uuidv4();
+                var newFeature = new google.maps.Data.Feature({
+                    id: featureId,
+                    geometry: new google.maps.Data.Point(originalMouseEvent.latLng),
+                    properties: { id: featureId, type: "apartment" },
+                });
+                map.data.add(newFeature);
+                map.data.overrideStyle(newFeature, {
+                    draggable: true,
+                    label: { ...feature_styles.apartment.default.label, ...{ text: "Add Label?", color: "blue" }},
+                    zIndex: 999,
+                });
+                addKeyPressHandlerTo(newFeature);
+                return false;
+            };
+
+            // ADD GATE
+            document.querySelector("#add-gate-in-feature-menuitem").onclick = function (event) {
+                closeAllOpenContextMenus();
+
+                let originalMouseEvent = mouseEvent;
+                const featureId = uuidv4();
+                var newFeature = new google.maps.Data.Feature({
+                    id: featureId,
+                    geometry: new google.maps.Data.Point(originalMouseEvent.latLng),
+                    properties: { id: featureId, type: "gate" },
+                });
+                map.data.add(newFeature);
+                map.data.overrideStyle(newFeature, {
+                    draggable: true,
+                    label: { ...feature_styles.gate.default.label, ...{ text: "Add Label?", color: "blue" }},
+                    zIndex: 999,
+                });
+                addKeyPressHandlerTo(newFeature);
+                return false;
+            };
+
+            // ADD DOOR
+            document.querySelector("#add-door-in-feature-menuitem").onclick = function (event) {
+                closeAllOpenContextMenus();
+
+                let originalMouseEvent = mouseEvent;
+                const featureId = uuidv4();
+                var newFeature = new google.maps.Data.Feature({
+                    id: featureId,
+                    geometry: new google.maps.Data.Point(originalMouseEvent.latLng),
+                    properties: { id: featureId, type: "door" },
+                });
+                map.data.add(newFeature);
+                map.data.overrideStyle(newFeature, {
+                    draggable: true,
+                    label: { ...feature_styles.door.default.label, ...{ text: "Add Label?", color: "blue" }},
+                    zIndex: 999,
+                });
+                addKeyPressHandlerTo(newFeature);
+                return false;
+            };
+
+            // ADD MAILROOM
+            document.querySelector("#add-mailroom-in-feature-menuitem").onclick = function (event) {
+                closeAllOpenContextMenus();
+                let originalMouseEvent = mouseEvent;
+                const featureId = uuidv4();
+                var newFeature = new google.maps.Data.Feature({
+                    id: featureId,
+                    geometry: new google.maps.Data.Point(originalMouseEvent.latLng),
+                    properties: { id: featureId, type: "mailroom" },
+                });
+                map.data.add(newFeature);
+                map.data.overrideStyle(newFeature, {
+                    draggable: true,
+                    label: { ...feature_styles.mailroom.default.label, ...{ text: "Add Label?", color: "blue" }},
+                    zIndex: 999,
+                });
+                addKeyPressHandlerTo(newFeature);
+                return false;
+            };
+
+            // ADD APARTMENT SHAPE
+            document.querySelector("#add-apartment-shape-in-feature-menuitem").onclick = function (event) {
+                closeAllOpenContextMenus();
+                map.data.setDrawingMode("Polygon");
+                featureProperties.type = "apartment";
+                return false;
+            };
+
+            // ADD BUILDING SHAPE
+            document.querySelector("#add-building-in-feature-menuitem").onclick = function (event) {
+                closeAllOpenContextMenus();
+                map.data.setDrawingMode("Polygon");
+                featureProperties.type = "building";
+                return false;
+            };
+        }); // END OF FEATURE CONTEXT MENU
+
+        ///////////////////////
+        // ADD FEATURE EVENT //
+        map.data.addListener("addfeature", (event) => {
+            console.log('Called map.data.addListener("addfeature")');
+            let featureType = event.feature.getProperty("type");
+            // get the default style for the feature, or the highlight feature style
+            let featureStyleOptions = event.feature.getProperty("highlight")
+                ? feature_styles[featureType].highlight
+                : feature_styles[featureType].default;
+            map.data.overrideStyle(event.feature, featureStyleOptions);
+
+            // set the feature's label
+            // there's no support in GM for Polygon labels, so we place a marker
+            let featureLabel = event.feature.getProperty("highlight")
+                ? event.feature.getProperty("highlight").search_term
+                : event.feature.getProperty("label");
+            if (event.feature.getGeometry().getType() == "Point") {
+                map.data.overrideStyle(event.feature, {
+                    label: featureLabel ? { ...featureStyleOptions.label, ...{ text: featureLabel } } : null,
+                });
+            } else if (event.feature.getGeometry().getType() == "Polygon" && !polygonLabelMarkers.has(event.feature.getId())) {
+                let marker = new google.maps.Marker({
+                    position: event.feature.getGeometry().getCenter(),
+                    map,
+                    icon: {
+                        path: google.maps.SymbolPath.CIRCLE,
+                        scale: 1,
+                        fillOpacity: 0.0,
+                        strokeOpacity: 0.0,
+                    },
+                    clickable: false,
+                    draggable: false,
+                    label: featureLabel ? { ...featureStyleOptions.label, ...{ text: featureLabel } } : null,
+                    title: featureLabel ? featureLabel : null,
+                });
+                polygonLabelMarkers.set(event.feature.getId(), marker);
+            }
+        });
+
+        // KEYPRESS FUNCTION
+        function addKeyPressHandlerTo(feature) {
+            let featureType = feature.getProperty("type");
+            // get the default style for the feature, or the highlight feature style
+            let featureStyleOptions = feature.getProperty("highlight") ? feature_styles[featureType].highlight : feature_styles[featureType].default;
+            let inputString = feature.getProperty("label") || "";
+
+            // Chrome wasn't sending backspace with "keypress", so we use "keydown"
+            document.removeEventListener("keydown", keypressHandler);
+            document.addEventListener("keydown", keypressHandler);
+
+            // if we have an inputString, change the color to blue, so user knows they are editing the label
+            // but don't reset the label otherwise
+            if (inputString) {
+                if (feature.getGeometry().getType() == "Point") {
+                    map.data.overrideStyle(feature, {
+                        label: inputString ? { ...featureStyleOptions.label, ...{ text: inputString, color: "blue" } } : null,
+                    });
+                } else if (feature.getGeometry().getType() == "Polygon") {
+                    polygonLabelMarkers
+                        .get(feature.getId())
+                        .setLabel(inputString ? { ...featureStyleOptions.label, ...{ text: inputString, color: "blue" } } : null);
+                }
+            }
+
+            function keypressHandler(e) {
+                // return key
+                if (e.keyCode == 13) {
+                    document.removeEventListener("keydown", keypressHandler);
+                    if (feature.getGeometry().getType() == "Point") {
+                        map.data.overrideStyle(feature, {
+                            label: inputString ? { ...featureStyleOptions.label, ...{ text: inputString } } : null,
+                        });
+                    } else if (feature.getGeometry().getType() == "Polygon") {
+                        polygonLabelMarkers
+                            .get(feature.getId())
+                            .setLabel(inputString ? { ...featureStyleOptions.label, ...{ text: inputString } } : null);
+                    }
+                    // save the new label for the feature
+                    feature.toGeoJson(function (geoJson) {
+                        updateFeature(geoJson).catch((error) => {
+                            console.error("Fetch Error:", error);
+                        });
+                    });
+                } else {
+                    // handle backspace
+                    if (e.keyCode == 8) {
+                        if (inputString) inputString = inputString.slice(0, -1);
+                    } else if (e.key.length == 1) {
+                        // Not a control key
+                        inputString += e.key;
+                    }
+
+                    feature.setProperty("label", inputString);
+
+                    if (feature.getGeometry().getType() == "Point") {
+                        map.data.overrideStyle(feature, {
+                            label: inputString ? { ...featureStyleOptions.label, ...{ text: inputString, color: "blue" } } : null,
+                        });
+                    } else if (feature.getGeometry().getType() == "Polygon") {
+                        polygonLabelMarkers
+                            .get(feature.getId())
+                            .setLabel(inputString ? { ...featureStyleOptions.label, ...{ text: inputString, color: "blue" } } : null);
+                    }
+                }
+            }
+        }
+
+        // SET GEOMETRY EVENT
+        map.data.addListener("setgeometry", (event) => {
+            // move the feature label to the new middle if it's a polygon
+            // if this causes performance issues, can be removed - is purely cosmetic
+            if (event.feature.getGeometry().getType() == "Polygon") {
+                polygonLabelMarkers.get(event.feature.getId()).setPosition(event.feature.getGeometry().getCenter());
+            }
+
+            // save the new geometry
+            event.feature.toGeoJson(function (geoJson) {
+                updateFeature(geoJson).catch((error) => {
+                    console.error("Fetch Error:", error);
+                });
+            });
+        });
+
+        // UPDATE FEATURE ASYNC API CALL
+        async function updateFeature(geojson) {
+            let response = await fetch("/api/map-features", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify(geojson),
+            });
+
+            let data = await response.json();
+            return data;
+        }
+    }
+</script>
+
+{%endblock head%} {%block content%}
+<input id="pac-input" class="controls" type="text" placeholder="Search" />
+<div id="map">&nbsp;</div>
+<div id="map-context-menu" class="context-menu">
+    <a id="add-building-menuitem" href="#">Add Building</a>
+    <hr />
+    <a id="add-complex-menuitem" href="#">Add Complex</a>
+    <hr />
+    <a id="center-map-item" href="#">Center Map Here</a>
+</div>
+
+<div id="feature-context-menu" class="context-menu">
+    <h3 id="feature-type-text">Feature Type</h3>
+    <a id="edit-feature-menuitem" href="#">Edit Shape</a>
+    <hr />
+    <a id="edit-label-menuitem" href="#">Edit Label</a>
+    <hr />
+    <strong>Add Apartment<br />or Sub-unit</strong>
+    <ul>
+        <li><a id="add-apartment-point-in-feature-menuitem" href="#">As Point</a></li>
+        <li><a id="add-apartment-shape-in-feature-menuitem" href="#">As Shape</a></li>
+    </ul>
+    <hr />
+    <a id="add-building-in-feature-menuitem" href="#">Add Building</a>
+    <hr />
+    <a id="add-gate-in-feature-menuitem" href="#">Add Gate</a>
+    <hr />
+    <a id="add-door-in-feature-menuitem" href="#">Add Door</a>
+    <hr />
+    <a id="add-mailroom-in-feature-menuitem" href="#">Add Mailroom</a>
+</div>
+
+<div id="attribution">
+    Icons made by <a href="https://www.freepik.com" title="Freepik">Freepik</a> from
+    <a href="https://www.flaticon.com/" title="Flaticon">www.flaticon.com</a>
+</div>
+
+{%endblock content%}

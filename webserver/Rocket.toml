@@ -1,0 +1,27 @@
+[global.databases]
+# to use your DB, change string below. Note my non-standard Postgres port
+apartment_db = { url = "postgres://postgres@localhost:5433/apartment_finder", pool_size = 10 }
+
+[debug]
+address = "127.0.0.1"
+port = 8080
+keep_alive = 1
+secret_key = "2R+nXkrbvqY8hGDCyDx/zwVZ2qoW9Sii+BMak4n+ETs="
+limits = { forms = 32768 }
+template_dir = "templates/"
+
+[staging]
+address = "127.0.0.1"
+port = 8080
+keep_alive = 0
+secret_key = "2R+nXkrbvqY7hGDCyDx/zwVZ2qoW9Sii+BMak4n+ETs="
+limits = { forms = 32768 }
+template_dir = "templates/"
+
+[release]
+address = "0.0.0.0"
+port = 80
+keep_alive = 5
+secret_key = "2R+nXkrevqY8hGDCtDx/zwVZ2qoW9Sii+BMak4n+ETs="
+limits = { forms = 32768 }
+template_dir = "templates/"

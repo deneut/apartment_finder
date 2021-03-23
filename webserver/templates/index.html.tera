@@ -1,0 +1,23 @@
+{% extends "base" %}
+{% block head %}
+<title>Apartment Finder 3000™</title>
+
+<style>
+    body {width: 768px; margin: auto;}
+    footer {margin-top: 100px;}
+</style>
+
+{%endblock head%}
+
+{%block content%}
+<h1>Apartment Finder 3000™</h1>
+
+<ul>
+    <li><a href="/editor">Editor</a> - Add new data to the map, or edit existing data.</li>
+</ul>
+
+<footer>
+Version: {{version}}
+</footer>
+
+{%endblock content%}
